@@ -314,9 +314,9 @@ def main():
             )
 
     # ── Tabs ─────────────────────────────────────────────────────────────────
-    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
         "📊 Overview", "⚔️ Matchups", "👤 Team Detail",
-        "🔄 Streamers", "📈 Trends", "🏆 Analytics"
+        "📈 Trends", "🏆 Analytics"
     ])
 
     active_team_id = st.session_state.selected_team_id
@@ -329,10 +329,8 @@ def main():
     with tab3:
         render_team_detail(teams, pro_schedule, props_data)
     with tab4:
-        render_streamers(my_team, pro_schedule, client, cache, selected_period, props_data)
-    with tab5:
         render_trends(teams)
-    with tab6:
+    with tab5:
         render_analytics(teams)
 
 

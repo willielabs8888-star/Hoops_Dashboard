@@ -71,7 +71,7 @@ HAS_ESPN: bool = bool(ESPN_S2 and ESPN_SWID and ESPN_LEAGUE_ID)
 
 ODDS_API_KEY: str = _optional("ODDS_API_KEY")
 HAS_ODDS_API: bool = bool(ODDS_API_KEY)
-PROPS_CACHE_TTL: int = int(_optional("PROPS_CACHE_TTL", "3600"))
+PROPS_CACHE_TTL: int = int(_optional("PROPS_CACHE_TTL", "86400"))
 
 # Scoring weights: how each stat converts to fantasy points
 SCORING_WEIGHTS: dict[str, float] = {

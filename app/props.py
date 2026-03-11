@@ -148,9 +148,17 @@ class PropsClient:
 
     # ─── Public API ──────────────────────────────────────────────────────────
 
+    # Season end date — stop burning API requests after this
+    SEASON_END = date(2026, 3, 23)
+
     def get_today_props(self, force_refresh: bool = False) -> dict[str, dict]:
         """
-        Fetch all available player prop lines for today's NBA games.
+        Fetch player prop lines for today's NBA games.
+
+        To conserve API quota (500 requests/month on free tier), this method
+        fetches at most TWICE per day — once after 6 AM and once after 6 PM.
+        Each fetch window uses its own cache key (AM/PM) so both are preserved.
+        No fetches occur after the season end date (2026-03-23).
 
         Returns
         -------
@@ -162,29 +170,47 @@ class PropsClient:
                 "game": str,              # "LAL vs BOS" style
             }}
         """
-        # Check memory cache
+        # Season is over — don't waste API calls
+        if date.today() > self.SEASON_END:
+            logger.info("Season ended %s — skipping props fetch", self.SEASON_END)
+            return self._props_cache or {}
+
+        now = datetime.now()
+        window = "pm" if now.hour >= 18 else "am"
+
+        # Check memory cache (valid until next window)
         if not force_refresh and self._props_cache and (
             time.time() - self._cache_timestamp < self.cache_ttl
         ):
             return self._props_cache
 
-        # Check disk cache
-        disk_data = self._read_disk_cache()
+        # Check disk cache for current window
+        disk_data = self._read_disk_cache(window=window)
         if not force_refresh and disk_data is not None:
             self._props_cache = disk_data
             self._cache_timestamp = time.time()
             return disk_data
 
-        # Fetch fresh data
+        # Before 6 AM: too early, use any stale cache
+        if not force_refresh and now.hour < 6:
+            logger.info("Before 6 AM — skipping props fetch, using cache if available")
+            # Try yesterday PM cache as fallback
+            stale = self._read_disk_cache(window="pm", allow_stale=True)
+            if stale:
+                self._props_cache = stale
+                self._cache_timestamp = time.time()
+                return stale
+            return self._props_cache or {}
+
+        # In a valid fetch window (6 AM+ or 6 PM+) with no cache: fetch
         try:
             props_data = self._fetch_all_props()
             self._props_cache = props_data
             self._cache_timestamp = time.time()
-            self._write_disk_cache(props_data)
+            self._write_disk_cache(props_data, window=window)
             return props_data
         except Exception as e:
             logger.error("Failed to fetch props: %s", e)
-            # Return stale cache if available
             if self._props_cache:
                 logger.info("Returning stale props cache")
                 return self._props_cache
@@ -420,37 +446,39 @@ class PropsClient:
 
     # ─── Caching ─────────────────────────────────────────────────────────────
 
-    def _disk_cache_path(self) -> Path:
-        return self.cache_dir / f"props_{date.today().isoformat()}.json"
+    def _disk_cache_path(self, window: str = "am") -> Path:
+        return self.cache_dir / f"props_{date.today().isoformat()}_{window}.json"
 
-    def _read_disk_cache(self) -> Optional[dict]:
-        """Read today's cached props from disk if fresh enough."""
-        path = self._disk_cache_path()
+    def _read_disk_cache(self, window: str = "am", allow_stale: bool = False) -> Optional[dict]:
+        """Read cached props from disk for a specific window (am/pm)."""
+        path = self._disk_cache_path(window)
         if not path.exists():
             return None
 
         try:
             mtime = path.stat().st_mtime
-            if time.time() - mtime > self.cache_ttl:
+            if not allow_stale and time.time() - mtime > self.cache_ttl:
                 return None
             with open(path) as f:
                 return json.load(f)
         except Exception:
             return None
 
-    def _write_disk_cache(self, data: dict):
-        """Write props data to disk cache."""
+    def _write_disk_cache(self, data: dict, window: str = "am"):
+        """Write props data to disk cache for a specific window."""
         try:
             # Clean up old cache files (keep last 3 days)
             for old_file in self.cache_dir.glob("props_*.json"):
                 try:
-                    file_date = old_file.stem.replace("props_", "")
-                    if date.fromisoformat(file_date) < date.today() - timedelta(days=3):
+                    # Extract date portion from "props_2026-03-11_am.json"
+                    stem = old_file.stem  # e.g. "props_2026-03-11_am"
+                    date_part = stem.split("_")[1]  # "2026-03-11"
+                    if date.fromisoformat(date_part) < date.today() - timedelta(days=3):
                         old_file.unlink()
-                except (ValueError, OSError):
+                except (ValueError, OSError, IndexError):
                     pass
 
-            with open(self._disk_cache_path(), "w") as f:
+            with open(self._disk_cache_path(window), "w") as f:
                 json.dump(data, f, indent=2)
         except Exception as e:
             logger.warning("Failed to write props cache: %s", e)
